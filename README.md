@@ -2,8 +2,9 @@
 
 ----
 
-This fork fixes one simple issue -- random order of fields in generated sources.
-I added trivial sort order - id first, if present, all other fields are sorted alphabetically.
+This fork fixes one simple issue in original metamodel generator - random order of fields in generated sources.
+
+So, i added trivial sort order - id first (if present), all other fields are sorted alphabetically next to id.
 
 Works for me ^
 
