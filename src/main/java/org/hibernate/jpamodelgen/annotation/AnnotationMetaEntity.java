@@ -16,18 +16,8 @@
  */
 package org.hibernate.jpamodelgen.annotation;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import javax.lang.model.element.Element;
-import javax.lang.model.element.Modifier;
-import javax.lang.model.element.PackageElement;
-import javax.lang.model.element.TypeElement;
-import javax.lang.model.util.ElementFilter;
-import javax.tools.Diagnostic;
 
+import com.google.common.collect.Ordering;
 import org.hibernate.jpamodelgen.Context;
 import org.hibernate.jpamodelgen.ImportContextImpl;
 import org.hibernate.jpamodelgen.model.ImportContext;
@@ -38,6 +28,15 @@ import org.hibernate.jpamodelgen.util.AccessTypeInformation;
 import org.hibernate.jpamodelgen.util.Constants;
 import org.hibernate.jpamodelgen.util.TypeUtils;
 
+import javax.lang.model.element.Element;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.PackageElement;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.util.ElementFilter;
+import javax.tools.Diagnostic;
+import java.util.*;
+
+
 /**
  * Class used to collect meta information about an annotated type (entity, embeddable or mapped superclass).
  *
@@ -45,165 +44,173 @@ import org.hibernate.jpamodelgen.util.TypeUtils;
  * @author Hardy Ferentschik
  * @author Emmanuel Bernard
  */
-public class AnnotationMetaEntity implements MetaEntity {
+public class AnnotationMetaEntity
+        implements MetaEntity {
 
-	private final ImportContext importContext;
-	private final TypeElement element;
-	private final Map<String, MetaAttribute> members;
-	private final Context context;
+    private static final Comparator<MetaAttribute> META_ATTRIBUTE_COMPARATOR = new Comparator<MetaAttribute>() {
+        @Override
+        public int compare(MetaAttribute metaAttribute, MetaAttribute t1) {
+            if (metaAttribute.getPropertyName().equals("id")) {
+                return -1;
+            }
+            return metaAttribute.getPropertyName().compareTo(t1.getPropertyName());
+        }
+    };
 
-	private AccessTypeInformation entityAccessTypeInfo;
+    private final ImportContext importContext;
 
-	/**
-	 * Whether the members of this type have already been initialized or not.
-	 * <p>
-	 * Embeddables and mapped super-classes need to be lazily initialized since the access type may be determined by
-	 * the class which is embedding or sub-classing the entity or super-class. This might not be known until
-	 * annotations are processed.
-	 * <p>
-	 * Also note, that if two different classes with different access types embed this entity or extend this mapped
-	 * super-class, the access type of the embeddable/super-class will be the one of the last embedding/sub-classing
-	 * entity processed. The result is not determined (that's ok according to the spec).
-	 */
-	private boolean initialized;
+    private final TypeElement element;
 
-	/**
-	 * Another meta entity for the same type which should be merged lazily with this meta entity. Doing the merge
-	 * lazily is required for embeddedables and mapped supertypes to only pull in those members matching the access
-	 * type as configured via the embedding entity or subclass (also see METAGEN-85).
-	 */
-	private MetaEntity entityToMerge;
+    private final Map<String, MetaAttribute> members;
 
-	public AnnotationMetaEntity(TypeElement element, Context context, boolean lazilyInitialised) {
-		this.element = element;
-		this.context = context;
-		this.members = new HashMap<String, MetaAttribute>();
-		this.importContext = new ImportContextImpl( getPackageName() );
-		if ( !lazilyInitialised ) {
-			init();
-		}
-	}
+    private final Context context;
 
-	public AccessTypeInformation getEntityAccessTypeInfo() {
-		return entityAccessTypeInfo;
-	}
+    private AccessTypeInformation entityAccessTypeInfo;
 
-	public final Context getContext() {
-		return context;
-	}
+    /**
+     * Whether the members of this type have already been initialized or not.
+     * <p>
+     * Embeddables and mapped super-classes need to be lazily initialized since the access type may be determined by
+     * the class which is embedding or sub-classing the entity or super-class. This might not be known until
+     * annotations are processed.
+     * <p>
+     * Also note, that if two different classes with different access types embed this entity or extend this mapped
+     * super-class, the access type of the embeddable/super-class will be the one of the last embedding/sub-classing
+     * entity processed. The result is not determined (that's ok according to the spec).
+     */
+    private boolean initialized;
 
-	public final String getSimpleName() {
-		return element.getSimpleName().toString();
-	}
+    /**
+     * Another meta entity for the same type which should be merged lazily with this meta entity. Doing the merge
+     * lazily is required for embeddedables and mapped supertypes to only pull in those members matching the access
+     * type as configured via the embedding entity or subclass (also see METAGEN-85).
+     */
+    private MetaEntity entityToMerge;
 
-	public final String getQualifiedName() {
-		return element.getQualifiedName().toString();
-	}
+    public AnnotationMetaEntity(TypeElement element, Context context, boolean lazilyInitialised) {
+        this.element = element;
+        this.context = context;
+        this.members = new HashMap<String, MetaAttribute>();
+        this.importContext = new ImportContextImpl(getPackageName());
+        if (!lazilyInitialised) {
+            init();
+        }
+    }
 
-	public final String getPackageName() {
-		PackageElement packageOf = context.getElementUtils().getPackageOf( element );
-		return context.getElementUtils().getName( packageOf.getQualifiedName() ).toString();
-	}
+    public AccessTypeInformation getEntityAccessTypeInfo() {
+        return entityAccessTypeInfo;
+    }
 
-	public List<MetaAttribute> getMembers() {
-		if ( !initialized ) {
-			init();
-			if ( entityToMerge != null ) {
-				mergeInMembers( entityToMerge.getMembers() );
-			}
-		}
+    public final Context getContext() {
+        return context;
+    }
 
-		return new ArrayList<MetaAttribute>( members.values() );
-	}
+    public final String getSimpleName() {
+        return element.getSimpleName().toString();
+    }
 
-	@Override
-	public boolean isMetaComplete() {
-		return false;
-	}
+    public final String getQualifiedName() {
+        return element.getQualifiedName().toString();
+    }
 
-	private void mergeInMembers(Collection<MetaAttribute> attributes) {
-		for ( MetaAttribute attribute : attributes ) {
-			// propagate types to be imported
-			importType( attribute.getMetaType() );
-			importType( attribute.getTypeDeclaration() );
+    public final String getPackageName() {
+        PackageElement packageOf = context.getElementUtils().getPackageOf(element);
+        return context.getElementUtils().getName(packageOf.getQualifiedName()).toString();
+    }
 
-			members.put( attribute.getPropertyName(), attribute );
-		}
-	}
+    public List<MetaAttribute> getMembers() {
+        if (!initialized) {
+            init();
+            if (entityToMerge != null) {
+                mergeInMembers(entityToMerge.getMembers());
+            }
+        }
 
-	public void mergeInMembers(MetaEntity other) {
-		// store the entity in order do the merge lazily in case of a non-initialized embeddedable or mapped superclass
-		if ( !initialized ) {
-			this.entityToMerge = other;
-		}
-		else {
-			mergeInMembers( other.getMembers() );
-		}
-	}
+        return Ordering.from(META_ATTRIBUTE_COMPARATOR).immutableSortedCopy(members.values());
+    }
 
-	public final String generateImports() {
-		return importContext.generateImports();
-	}
+    @Override
+    public boolean isMetaComplete() {
+        return false;
+    }
 
-	public final String importType(String fqcn) {
-		return importContext.importType( fqcn );
-	}
+    private void mergeInMembers(Collection<MetaAttribute> attributes) {
+        for (MetaAttribute attribute : attributes) {
+            // propagate types to be imported
+            importType(attribute.getMetaType());
+            importType(attribute.getTypeDeclaration());
 
-	public final String staticImport(String fqcn, String member) {
-		return importContext.staticImport( fqcn, member );
-	}
+            members.put(attribute.getPropertyName(), attribute);
+        }
+    }
 
-	public final TypeElement getTypeElement() {
-		return element;
-	}
+    public void mergeInMembers(MetaEntity other) {
+        // store the entity in order do the merge lazily in case of a non-initialized embeddedable or mapped superclass
+        if (!initialized) {
+            this.entityToMerge = other;
+        } else {
+            mergeInMembers(other.getMembers());
+        }
+    }
 
-	@Override
-	public String toString() {
-		final StringBuilder sb = new StringBuilder();
-		sb.append( "AnnotationMetaEntity" );
-		sb.append( "{element=" ).append( element );
-		sb.append( ", members=" ).append( members );
-		sb.append( '}' );
-		return sb.toString();
-	}
+    public final String generateImports() {
+        return importContext.generateImports();
+    }
 
-	protected TypeElement getElement() {
-		return element;
-	}
+    public final String importType(String fqcn) {
+        return importContext.importType(fqcn);
+    }
 
-	protected final void init() {
-		getContext().logMessage( Diagnostic.Kind.OTHER, "Initializing type " + getQualifiedName() + "." );
+    public final String staticImport(String fqcn, String member) {
+        return importContext.staticImport(fqcn, member);
+    }
 
-		TypeUtils.determineAccessTypeForHierarchy( element, context );
-		entityAccessTypeInfo = context.getAccessTypeInfo( getQualifiedName() );
+    public final TypeElement getTypeElement() {
+        return element;
+    }
 
-		List<? extends Element> fieldsOfClass = ElementFilter.fieldsIn( element.getEnclosedElements() );
-		addPersistentMembers( fieldsOfClass, AccessType.FIELD );
+    @Override
+    public String toString() {
+        return "AnnotationMetaEntity" + "{element=" + element + ", members=" + members + '}';
+    }
 
-		List<? extends Element> methodsOfClass = ElementFilter.methodsIn( element.getEnclosedElements() );
-		addPersistentMembers( methodsOfClass, AccessType.PROPERTY );
+    protected TypeElement getElement() {
+        return element;
+    }
 
-		initialized = true;
-	}
+    protected final void init() {
+        getContext().logMessage(Diagnostic.Kind.OTHER, "Initializing type " + getQualifiedName() + ".");
 
-	private void addPersistentMembers(List<? extends Element> membersOfClass, AccessType membersKind) {
-		for ( Element memberOfClass : membersOfClass ) {
-			AccessType forcedAccessType = TypeUtils.determineAnnotationSpecifiedAccessType( memberOfClass );
-			if ( entityAccessTypeInfo.getAccessType() != membersKind && forcedAccessType == null ) {
-				continue;
-			}
+        TypeUtils.determineAccessTypeForHierarchy(element, context);
+        entityAccessTypeInfo = context.getAccessTypeInfo(getQualifiedName());
 
-			if ( TypeUtils.containsAnnotation( memberOfClass, Constants.TRANSIENT )
-					|| memberOfClass.getModifiers().contains( Modifier.TRANSIENT )
-					|| memberOfClass.getModifiers().contains( Modifier.STATIC ) ) {
-				continue;
-			}
+        List<? extends Element> fieldsOfClass = ElementFilter.fieldsIn(element.getEnclosedElements());
+        addPersistentMembers(fieldsOfClass, AccessType.FIELD);
 
-			MetaAttributeGenerationVisitor visitor = new MetaAttributeGenerationVisitor( this, context );
-			AnnotationMetaAttribute result = memberOfClass.asType().accept( visitor, memberOfClass );
-			if ( result != null ) {
-				members.put( result.getPropertyName(), result );
-			}
-		}
-	}
+        List<? extends Element> methodsOfClass = ElementFilter.methodsIn(element.getEnclosedElements());
+        addPersistentMembers(methodsOfClass, AccessType.PROPERTY);
+
+        initialized = true;
+    }
+
+    private void addPersistentMembers(List<? extends Element> membersOfClass, AccessType membersKind) {
+        for (Element memberOfClass : membersOfClass) {
+            AccessType forcedAccessType = TypeUtils.determineAnnotationSpecifiedAccessType(memberOfClass);
+            if (entityAccessTypeInfo.getAccessType() != membersKind && forcedAccessType == null) {
+                continue;
+            }
+
+            if (TypeUtils.containsAnnotation(memberOfClass, Constants.TRANSIENT)
+                || memberOfClass.getModifiers().contains(Modifier.TRANSIENT)
+                || memberOfClass.getModifiers().contains(Modifier.STATIC)) {
+                continue;
+            }
+
+            MetaAttributeGenerationVisitor visitor = new MetaAttributeGenerationVisitor(this, context);
+            AnnotationMetaAttribute result = memberOfClass.asType().accept(visitor, memberOfClass);
+            if (result != null) {
+                members.put(result.getPropertyName(), result);
+            }
+        }
+    }
 }
